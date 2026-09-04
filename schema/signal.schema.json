@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://grok-meme-desk/schema/signal.v1.json",
+  "title": "Squad signal v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "signal_id", "bot", "type", "ts", "ttl_sec"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "signal_id": { "type": "string", "minLength": 8, "maxLength": 160 },
+    "bot": { "type": "string", "pattern": "^[a-z0-9_-]{2,32}$" },
+    "type": { "enum": ["narrative", "kol_mention", "sentiment_score", "contract_risk", "resolution", "risk_proposal", "digest", "heartbeat"] },
+    "ts": { "type": "string", "format": "date-time" },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "ttl_sec": { "type": "integer", "minimum": 30, "maximum": 604800 },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "chain": { "const": "solana" },
+    "mint": { "type": ["string", "null"], "pattern": "^[1-9A-HJ-NP-Za-km-z]{32,44}$" },
+    "ticker": { "type": "string", "maxLength": 24 },
+    "narrative_id": { "type": "string", "pattern": "^[a-z0-9-]{3,80}$" },
+    "direction": { "enum": ["bullish", "bearish", "neutral", "watch", "avoid"] },
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "reasons": {
+      "type": "array", "maxItems": 10,
+      "items": { "type": "object", "required": ["type", "text", "evidence_url"], "properties": {
+        "type": { "type": "string", "maxLength": 40 }, "text": { "type": "string", "maxLength": 400 },
+        "evidence_url": { "type": "string", "format": "uri", "maxLength": 500 }, "observed_at": { "type": "string", "format": "date-time" } } }
+    },
+    "source": { "type": "string", "maxLength": 40 },
+    "counts": { "type": "object", "properties": { "requested": { "type": "integer", "minimum": 0 }, "received": { "type": "integer", "minimum": 0 } } },
+    "hard_flags": { "type": "array", "maxItems": 20, "items": { "enum": ["mint_authority_active", "freeze_authority_active", "lp_unlocked", "top10_gt_40pct", "creator_serial_rugger", "honeypot_indicator", "socials_mismatch", "copycat_of_live_token"] } },
+    "soft_flags": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 60 } },
+    "kol_handles": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 40 } },
+    "tags": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 40 } },
+    "proposal": { "type": ["object", "null"], "required": ["param", "proposed"], "properties": {
+      "param": { "type": "string", "maxLength": 60 }, "current": {}, "proposed": {},
+      "range": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } },
+      "rationale": { "type": "string", "maxLength": 800 }, "rollback": { "type": "string", "maxLength": 400 } } },
+    "playbook_version": { "type": "string", "maxLength": 40 }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "enum": ["sentiment_score", "contract_risk"] } } }, "then": { "required": ["mint", "reasons"], "properties": { "mint": { "type": "string" } } } },
+    { "if": { "properties": { "type": { "const": "narrative" } } }, "then": { "required": ["narrative_id", "reasons"] } },
+    { "if": { "properties": { "type": { "const": "kol_mention" } } }, "then": { "required": ["reasons", "kol_handles"] } },
+    { "if": { "properties": { "type": { "const": "risk_proposal" } } }, "then": { "required": ["proposal"] } }
+  ]
+}

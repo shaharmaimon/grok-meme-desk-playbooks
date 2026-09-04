@@ -1,0 +1,10 @@
+{
+  "version": "2026-09-04.1",
+  "note": "Tiered handle list for the Kol Bot. Fill with real handles before Phase 3. tier 1 = proven early callers, tier 2 = large accounts, tier 3 = cabals/deployers. Max 60 handles in Standard.",
+  "tiers": {
+    "1": { "weight": 1.0, "handles": [] },
+    "2": { "weight": 0.6, "handles": [] },
+    "3": { "weight": 0.3, "handles": [] }
+  },
+  "exclude": []
+}
