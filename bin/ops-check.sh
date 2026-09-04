@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # ops-check.sh — prints one JSON line the Ops Bot copies into its heartbeat. Read-only apart from log rotation.
 WS="${WORKSPACE:-/workspace/desk}"
+# "Update Agent Computer" reboots the box and drops EMPTY directories; recreate the layout on every run.
+mkdir -p "$WS"/{cache,inbox,signals,state/uplink,state/ops,reports,logs,config,tools}
 alive=false; [ -f "$WS/state/uplink/uplink.pid" ] && kill -0 "$(cat "$WS/state/uplink/uplink.pid")" 2>/dev/null && alive=true
 outbox=0; oldest=0; now=$(date +%s)
 for d in "$WS"/signals/*/; do n=$(basename "$d"); case "$n" in _*) continue;; esac

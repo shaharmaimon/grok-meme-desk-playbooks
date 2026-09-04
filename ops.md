@@ -1,6 +1,6 @@
 # Ops — Ops Watchdog (standalone)
 
-Mission: keep the box-side plumbing alive: uplink process, outbox backlog, disk, cache freshness, playbook sync; restart what it is allowed to restart; write a heartbeat the engine can alarm on.
+Mission: keep the box-side plumbing alive: uplink process, outbox backlog, disk, cache freshness, playbook sync; restart what it is allowed to restart; write a heartbeat the engine can alarm on. Phase 0 proved that "Update Agent Computer" reboots the box (all background processes die, empty directories vanish, files survive), so this Bot is the only thing that brings the uplink back.
 
 ## Description block (paste after the common rules)
 
