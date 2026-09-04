@@ -6,7 +6,9 @@ WS="${WORKSPACE:-/workspace/desk}"; REPO="${1:-}"
 mkdir -p "$WS"/{cache,inbox,signals,state/uplink,state/ops,reports,logs,config,tools}
 if [ ! -e "$WS/playbooks" ]; then
   [ -n "$REPO" ] || { echo "usage: bootstrap.sh <git-repo-url>"; exit 1; }
-  git clone --depth 1 "$REPO" "$WS/_repo" && ln -sfn "$WS/_repo/squad/playbooks" "$WS/playbooks"
+  git clone --depth 1 "$REPO" "$WS/_repo"
+  # The repo may be the full project (playbooks under squad/playbooks) or a playbooks-only repo (root is the playbooks folder).
+  if [ -d "$WS/_repo/squad/playbooks" ]; then ln -sfn "$WS/_repo/squad/playbooks" "$WS/playbooks"; else ln -sfn "$WS/_repo" "$WS/playbooks"; fi
 fi
 ln -sfn "$WS/playbooks/bin" "$WS/bin"
 chmod +x "$WS"/playbooks/bin/*.sh "$WS"/playbooks/bin/*.mjs 2>/dev/null || true
