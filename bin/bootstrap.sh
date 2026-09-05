@@ -13,6 +13,7 @@ if [ ! -e "$WS/playbooks" ]; then
   if [ -d "$WS/_repo/squad/playbooks" ]; then ln -sfn "$WS/_repo/squad/playbooks" "$WS/playbooks"; else ln -sfn "$WS/_repo" "$WS/playbooks"; fi
 fi
 ln -sfn "$WS/playbooks/bin" "$WS/bin"
+(cd "$WS/playbooks" && git config core.fileMode false) 2>/dev/null || true   # chmod below must not show up as a local change
 chmod +x "$WS"/playbooks/bin/*.sh "$WS"/playbooks/bin/*.mjs 2>/dev/null || true
 for b in scout kol sent rug chief risk report ops probe; do mkdir -p "$WS/signals/$b" "$WS/state/$b" "$WS/inbox/$b"; done
 if ! command -v node >/dev/null 2>&1 && [ ! -x "$WS/tools/node/bin/node" ]; then
