@@ -37,7 +37,7 @@ Also drop a copy as a `heartbeat` signal into `/workspace/desk/signals/<bot>/` s
   bin/ -> playbooks/bin
   config/      engine.env (human-placed, chmod 600; Bots never read it)
   cache/       watchlist.json positions.json pnl.json events_24h.json signal_stats_7d.json narratives_seen.json
-  inbox/<bot>/ requests from the engine (rename to .done when processed)
+  inbox/<bot>/ requests from the engine as <id>.json; when processed, rename that file to <id>.done (replace the extension, keep the JSON inside)
   signals/<bot>/  outgoing; _delivered/ _expired/ _rejected/ managed by the uplink
   state/<bot>/ heartbeat.json, cursors; state/uplink/ status.json delivered.log
   reports/     digest-*.md risk-*.md

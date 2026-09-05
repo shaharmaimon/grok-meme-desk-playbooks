@@ -5,6 +5,8 @@
 // Config: /workspace/desk/config/engine.env (ENGINE_BASE_URL, ENGINE_TOKEN). Node >= 18 (global fetch). No dependencies.
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const WS = process.env.WORKSPACE || '/workspace/desk';
 const CFG = process.env.ENGINE_ENV || path.join(WS, 'config', 'engine.env');
@@ -14,6 +16,11 @@ const INBOX = path.join(WS, 'inbox');
 const STATE = path.join(WS, 'state', 'uplink');
 const LOG = path.join(WS, 'logs', 'uplink.log');
 const SCAN_MS = 10_000, PULL_MS = 300_000;
+// Self-update: playbooks-sync.sh (run hourly by the Ops Bot) replaces this file on disk; a running process would keep
+// the old code forever, so every pull compares the file's size+mtime with the one it started from and re-execs itself.
+const SELF = fileURLToPath(import.meta.url);
+const selfSig = () => { try { const s = fs.statSync(SELF); return `${s.size}:${Math.round(s.mtimeMs)}`; } catch { return ''; } };
+const SELF_SIG = selfSig();
 const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 for (const d of [SIG, CACHE, INBOX, STATE, path.dirname(LOG)]) fs.mkdirSync(d, { recursive: true });
@@ -125,16 +132,40 @@ async function pull() {
     const r = await call('GET', '/requests?bot=*');
     if (r.status === 200 && Array.isArray(r.data)) for (const q of r.data) {
       const dir = path.join(INBOX, q.bot); fs.mkdirSync(dir, { recursive: true });
-      const f = path.join(dir, `${q.request_id}.json`);
-      if (!fs.existsSync(f) && !fs.existsSync(f.replace(/\.json$/, '.done')) && !fs.existsSync(f.replace(/\.json$/, '.done.acked'))) fs.writeFileSync(f, JSON.stringify(q, null, 1));
+      // Any file starting with the request id (<id>.json, <id>.done, <id>.json.done, *.acked, *.unknown) means the Bot has or had it.
+      if (fs.readdirSync(dir).some((n) => n.startsWith(q.request_id))) continue;
+      fs.writeFileSync(path.join(dir, `${q.request_id}.json`), JSON.stringify(q, null, 1));
     }
+    // Processed requests: the Bot renames <id>.json to <id>.done (tolerated: <id>.json.done). The id is read from the JSON
+    // inside when possible; the engine answers 404 for an id it does not know (marked .unknown so it is never retried).
     for (const bot of fs.existsSync(INBOX) ? fs.readdirSync(INBOX) : []) {
-      for (const f of fs.readdirSync(path.join(INBOX, bot)).filter((n) => n.endsWith('.done'))) {
-        const id = f.replace(/\.done$/, '');
-        try { const a = await call('POST', `/requests/${id}/ack`, {}, bot); if (a.status === 200) fs.renameSync(path.join(INBOX, bot, f), path.join(INBOX, bot, f + '.acked')); } catch {}
+      const dir = path.join(INBOX, bot);
+      if (!fs.statSync(dir).isDirectory()) continue;
+      for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.done'))) {
+        const file = path.join(dir, f);
+        let id = f.replace(/(\.json)?\.done$/, '');
+        try { const j = JSON.parse(fs.readFileSync(file, 'utf8')); if (j && typeof j.request_id === 'string') id = j.request_id; } catch {}
+        try {
+          const a = await call('POST', `/requests/${encodeURIComponent(id)}/ack`, {}, bot);
+          if (a.status === 200) { fs.renameSync(file, file + '.acked'); log(`ack ${bot} ${id}`); }
+          else if (a.status === 404) { fs.renameSync(file, file + '.unknown'); log(`ack ${bot} ${id}: unknown to the engine`); }
+          else log(`ack ${bot} ${id}: HTTP ${a.status}`);
+        } catch (e) { log(`ack ${bot} ${id} failed: ${e.message}`); }
       }
     }
   } catch (e) { log(`requests pull failed: ${e.message}`); }
+  maybeReexecOnUpdate();
+}
+
+function maybeReexecOnUpdate() {
+  const cur = selfSig();
+  if (!cur || !SELF_SIG || cur === SELF_SIG) return;
+  log(`uplink code changed on disk (${SELF_SIG} -> ${cur}); re-exec`);
+  try {
+    const out = fs.openSync(path.join(path.dirname(LOG), 'uplink.out'), 'a');
+    spawn(process.execPath, [SELF], { detached: true, stdio: ['ignore', out, out], cwd: process.cwd(), env: process.env }).unref();
+  } catch (e) { log(`re-exec failed: ${e.message}`); return; }
+  process.exit(0);
 }
 
 function status() {
