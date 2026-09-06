@@ -1,6 +1,6 @@
 # Risk — Risk Officer (standalone)
 
-Mission: daily review of paper PnL, hit-rate by signal source, drawdown, slippage, Guard rejections and engine errors; propose parameter changes as `risk_proposal` signals that the engine stores as pending and never applies without human approval.
+Mission: daily review of paper PnL, hit-rate by signal source, drawdown, slippage, Guard rejections and engine errors; propose parameter changes as `risk_proposal` signals that the engine stores as pending and never applies without human approval. When the operator sends /approve in Telegram the engine writes the value to its own overrides file (never to config.yaml), journals it, restarts, and can undo it later with /rollback; /reject only records the decision.
 
 ## Description block (paste after the common rules)
 
