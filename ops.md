@@ -6,7 +6,7 @@ Mission: keep the box-side plumbing alive: uplink process, outbox backlog, disk,
 
 ```
 ROLE: Ops Watchdog. Every run (max 6 steps, no X plugin, no browser):
-1. Run: bash /workspace/desk/bin/ops-check.sh   (prints one JSON line: uplink_alive, outbox_count, oldest_outbox_age_s, cache_age_s, disk_free_mb, playbook_sha, last_playbook_sha, topology, engine_health_cached)
+1. Run: bash /workspace/desk/bin/ops-check.sh   (prints one JSON line: uplink_alive, outbox_count, oldest_outbox_age_s, cache_age_s, disk_free_mb, playbook_sha, last_playbook_sha, topology, engine_health_cached, uplink_last_error, uplink_last_ok_age_s)
 2. If uplink_alive is false: run bash /workspace/desk/bin/uplink.sh restart, then re-run ops-check.sh once.
 3. If playbook_sha differs from last_playbook_sha: run bash /workspace/desk/bin/playbooks-sync.sh and record the result.
 4. If topology is "local" and engine_health_cached is false: run bash /workspace/desk/bin/engine.sh restart once.
@@ -28,3 +28,19 @@ ROLE: Ops Watchdog. Every run (max 6 steps, no X plugin, no browser):
 
 ## Never
 - Install packages. Edit scripts. Reset the computer. Touch `/workspace/desk/config`.
+
+## Token rotation
+
+The squad bearer (`SIGNALS_TOKEN` in the VPS `.env`) is a single secret shared by the engine and the box's uplink. Rotating it never needs a manual uplink restart on the box anymore: the engine accepts the old token alongside the new one while `SIGNALS_TOKEN_PREV` is set, and `uplink.mjs` re-reads `engine.env` when the file changes or on the first `401`. Everything below runs from the human's shell; the Ops Bot is not involved beyond its normal heartbeat.
+
+Operator steps (the whole window should close within 24 h):
+
+1. **Rotate (VPS, as root):** `bash /opt/memebot/engine/scripts/vps/rotate-signals-token.sh` — mints a new token with `openssl rand -hex 32`, parks the current one in `SIGNALS_TOKEN_PREV` (atomic `.env` rewrite, `600`, backup `.env.bak-<ts>`), restarts `memebot`, waits for `/health`, mints a one-time bootstrap code and prints **only** the bootstrap URL on stdout (progress is on stderr; no token is ever printed). `/health` now shows `token_prev_configured: true`.
+2. **Hand the URL to the box:** send Probe the one-time URL with the same curl as `squad/app-paste/probe.uplink.txt` step 1 (`mkdir -p /workspace/desk/config && curl -fsS -m 20 "<URL>" -o /workspace/desk/config/engine.env && chmod 600 ... && wc -l ...`). The link is single-use and expires in 10 min; the file it returns carries the NEW token only.
+3. **Let the uplink pick it up:** the running uplink notices the changed `engine.env` on its next scan (≤ 10 s) and switches tokens by itself. If it was already refusing (`status.json` `last_error: "auth_401"`, backoff ≤ 60 s) the reload happens on that same scan. A belt-and-braces `bash /workspace/desk/bin/uplink.sh restart` (Ops's allow-listed command) is fine but not required.
+4. **Verify on the engine:** `curl -s 127.0.0.1:8787/health` — `uplink_last_seen` (last request that passed squad auth) keeps advancing, `squad_last_seen` (per-Bot heartbeats) too, and `auth_prev_used_24h` stops growing (every request still using the old token adds to it; the engine also logs one `token_prev_used` event per 10 min while that happens). `bash rotate-signals-token.sh status` prints the same three fields without secrets.
+5. **Finish (within 24 h):** `bash /opt/memebot/engine/scripts/vps/rotate-signals-token.sh finish` — removes `SIGNALS_TOKEN_PREV`, restarts, and the old token gets `401`. Until this runs, every engine boot older than 24 h into the window sends a Hebrew `warn` to Telegram ("רוטציית טוקן לא הושלמה"). `--force` on `rotate` starts a new window while one is open (the oldest token is dropped).
+
+Where it shows up on the box side: `ops-check.sh` adds `uplink_last_error` (`auth_401` = the engine refuses the token → the box needs the new bootstrap file) and `uplink_last_ok_age_s` (seconds since the last accepted call, `-1` = never) to the heartbeat JSON line, so a rotation that stalled is visible in `state/ops/heartbeat.json` and in the engine's ops heartbeat signal without reading any log.
+
+Never: paste the token itself into chat, a Bot description, or a signal; the one-time URL is the only thing that crosses to the box.

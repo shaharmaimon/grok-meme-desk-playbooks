@@ -3,6 +3,10 @@
 // - every 10s: scan /workspace/desk/signals/<bot>/*.json, validate minimally, POST /signals (or /heartbeat, /reports), move to _delivered|_rejected|_expired
 // - every 5min: pull /watchlist /positions /pnl /events /signals/stats into /workspace/desk/cache; every 30s: /requests into /workspace/desk/inbox/<bot>/ (+ acks)
 // Config: /workspace/desk/config/engine.env (ENGINE_BASE_URL, ENGINE_TOKEN). Node >= 18 (global fetch). No dependencies.
+// Token rotation: engine.env is re-read when its size/mtime changes (checked every scan and every pull) and on the first
+// 401/403 after a success, so a rotated token (new one-time bootstrap file) is picked up without a manual restart.
+// 401/403 = "auth rejected": its own log line, status.json last_error "auth_401"/"auth_403", backoff capped at 60 s
+// (an unreachable engine backs off up to 300 s as before).
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -16,6 +20,10 @@ const INBOX = path.join(WS, 'inbox');
 const STATE = path.join(WS, 'state', 'uplink');
 const LOG = path.join(WS, 'logs', 'uplink.log');
 const SCAN_MS = 10_000, PULL_MS = 300_000, REQ_PULL_MS = 30_000;   // requests every 30 s so a doorbell ring (45 s after the request) finds the file in the inbox
+// Tests only (engine/test/squad/uplink_env.test.ts): shorter cadences; unset on the box.
+const ms = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n >= 50 ? n : dflt; };
+const SCAN_EVERY = ms('UPLINK_SCAN_MS', SCAN_MS), PULL_EVERY = ms('UPLINK_PULL_MS', PULL_MS), REQ_PULL_EVERY = ms('UPLINK_REQ_PULL_MS', REQ_PULL_MS);
+const AUTH_BACKOFF_MAX_MS = 60_000, UNREACHABLE_BACKOFF_MAX_MS = 300_000;
 // Self-update: playbooks-sync.sh (run hourly by the Ops Bot) replaces this file on disk; a running process would keep
 // the old code forever, so every pull compares the file's size+mtime with the one it started from and re-execs itself.
 const SELF = fileURLToPath(import.meta.url);
@@ -41,15 +49,43 @@ function loadEnv() {
   if (!env.ENGINE_BASE_URL || !env.ENGINE_TOKEN) throw new Error('ENGINE_BASE_URL / ENGINE_TOKEN missing');
   return env;
 }
-const env = loadEnv();
-const BASE = env.ENGINE_BASE_URL.replace(/\/+$/, '');
+let env = loadEnv();
+let BASE = env.ENGINE_BASE_URL.replace(/\/+$/, '');
 let backoffMs = 0, lastOk = 0, lastErr = '';
+// engine.env signature (size:mtime) the running config came from; a different one on disk = reload.
+const cfgSig = () => { try { const s = fs.statSync(CFG); return `${s.size}:${Math.round(s.mtimeMs)}`; } catch { return ''; } };
+let CFG_SIG = cfgSig(), envLoadedAt = new Date().toISOString();
+let authRejected = false;   // true from the first 401/403 until the next accepted call (the forced reload happens once per streak)
+
+/** Re-read engine.env when it changed on disk (or `force`). A file that fails to parse keeps the running config. Returns true when reloaded. */
+function reloadEnvIfChanged(force) {
+  const cur = cfgSig();
+  if (!force && (!cur || cur === CFG_SIG)) return false;
+  let next; try { next = loadEnv(); } catch (e) { log(`engine.env reload failed (${e.message}); keeping the running config`); CFG_SIG = cur; return false; }
+  const tokenChanged = next.ENGINE_TOKEN !== env.ENGINE_TOKEN, urlChanged = next.ENGINE_BASE_URL !== env.ENGINE_BASE_URL;
+  env = next; BASE = env.ENGINE_BASE_URL.replace(/\/+$/, ''); CFG_SIG = cur; envLoadedAt = new Date().toISOString();
+  log(`engine.env reloaded (${force ? 'auth rejected' : 'file changed'}; token ${tokenChanged ? 'changed' : 'same'}, url ${urlChanged ? 'changed' : 'same'})`);
+  if (tokenChanged || urlChanged) { backoffMs = 0; authRejected = false; }   // try the new credentials right away
+  return true;
+}
+
+/** 401/403 from the engine: the token is wrong (rotated?) — reload engine.env once, back off at most 60 s, remember it in status.json. */
+function onAuthRejected(status, what) {
+  lastErr = `auth_${status}`;
+  const first = !authRejected; authRejected = true;
+  log(`auth rejected (HTTP ${status}) on ${what}: the engine refused ENGINE_TOKEN${first ? '; reloading engine.env' : ''}`);
+  if (first && reloadEnvIfChanged(true) && !backoffMs) return;   // a new token was on disk: no backoff, next tick uses it
+  const prev = backoffMs ? Math.max(5_000, backoffMs - Date.now()) : 5_000;
+  const wait = Math.min(AUTH_BACKOFF_MAX_MS, backoffMs ? prev * 2 : prev);
+  backoffMs = Date.now() + wait; log(`retry in ${Math.round(wait / 1000)}s (a rotated engine.env is picked up automatically)`);
+}
 
 async function call(method, p, body, bot) {
   const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 15_000);
   try {
     const res = await fetch(BASE + p, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${env.ENGINE_TOKEN}`, 'x-squad-bot': bot || 'uplink' }, body: body ? JSON.stringify(body) : undefined, signal: ctrl.signal });
     const text = await res.text(); let data; try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 300) }; }
+    if (res.status !== 401 && res.status !== 403) authRejected = false;
     return { status: res.status, data };
   } finally { clearTimeout(t); }
 }
@@ -83,6 +119,7 @@ function bodyFor(sig) {
 }
 
 async function scan() {
+  reloadEnvIfChanged(false);   // before the backoff gate: a rewritten engine.env clears an auth backoff within one scan
   if (backoffMs && Date.now() < backoffMs) return;
   let bots; try { bots = fs.readdirSync(SIG).filter((n) => !n.startsWith('_')); } catch { return; }
   for (const bot of bots) {
@@ -100,16 +137,18 @@ async function scan() {
         if (r.status === 202 || r.status === 200) {
           move(file, '_delivered');
           fs.appendFileSync(path.join(STATE, 'delivered.log'), `${new Date().toISOString()} ${bot} ${sig.signal_id} ${r.data?.status || r.status}\n`);
-          lastOk = Date.now(); backoffMs = 0;
+          lastOk = Date.now(); backoffMs = 0; lastErr = '';
         } else if (r.status === 422) {
           fs.writeFileSync(file + '.error', JSON.stringify(r.data)); move(file, '_rejected'); log(`422 ${f}: ${JSON.stringify(r.data).slice(0, 200)}`);
         } else if (r.status === 429) {
           log('429 rate limited; pausing 60s'); backoffMs = Date.now() + 60_000; return;
+        } else if (r.status === 401 || r.status === 403) {
+          onAuthRejected(r.status, `POST ${p}`); return;
         } else { throw new Error(`HTTP ${r.status}`); }
       } catch (e) {
         lastErr = e.message;
         const prev = backoffMs ? Math.max(10_000, backoffMs - Date.now()) : 5_000;
-        const wait = Math.min(300_000, prev * 2);
+        const wait = Math.min(UNREACHABLE_BACKOFF_MAX_MS, prev * 2);
         backoffMs = Date.now() + wait; log(`engine unreachable (${e.message}); retry in ${Math.round(wait / 1000)}s`); return;
       }
     }
@@ -117,6 +156,7 @@ async function scan() {
 }
 
 async function pull() {
+  reloadEnvIfChanged(false);
   await pullCache();
   await pullRequests();
   maybeReexecOnUpdate();
@@ -130,8 +170,8 @@ async function pullCache() {
       if (r.status === 200) {
         const tmp = path.join(CACHE, name + '.tmp');
         fs.writeFileSync(tmp, JSON.stringify({ fetched_at: new Date().toISOString(), data: r.data }, null, 1));
-        fs.renameSync(tmp, path.join(CACHE, name)); lastOk = Date.now();
-      }
+        fs.renameSync(tmp, path.join(CACHE, name)); lastOk = Date.now(); lastErr = '';   // an accepted call clears last_error (ops-check.sh reports it as uplink_last_error)
+      } else if (r.status === 401 || r.status === 403) { onAuthRejected(r.status, `GET ${p}`); return; }   // the other pulls would fail the same way
     } catch (e) { lastErr = e.message; log(`pull ${p} failed: ${e.message}`); }
   }
 }
@@ -143,6 +183,7 @@ async function pullRequests() {
   if (!fs.existsSync(seen)) { try { fs.writeFileSync(seen, JSON.stringify({ version: 1, updated_at: new Date().toISOString(), narratives: [] }, null, 1)); } catch {} }
   try {
     const r = await call('GET', '/requests?bot=*');
+    if (r.status === 401 || r.status === 403) { onAuthRejected(r.status, 'GET /requests'); return; }
     if (r.status === 200 && Array.isArray(r.data)) for (const q of r.data) {
       const dir = path.join(INBOX, q.bot); fs.mkdirSync(dir, { recursive: true });
       // Any file starting with the request id (<id>.json, <id>.done, <id>.json.done, *.acked, *.unknown) means the Bot has or had it.
@@ -183,13 +224,13 @@ function maybeReexecOnUpdate() {
 function status() {
   let backlog = 0;
   try { for (const b of fs.readdirSync(SIG).filter((n) => !n.startsWith('_'))) backlog += fs.readdirSync(path.join(SIG, b)).filter((n) => n.endsWith('.json')).length; } catch {}
-  fs.writeFileSync(path.join(STATE, 'status.json'), JSON.stringify({ ts: new Date().toISOString(), pid: process.pid, last_ok: lastOk ? new Date(lastOk).toISOString() : null, last_error: lastErr || null, backlog, backoff_until: backoffMs ? new Date(backoffMs).toISOString() : null }, null, 1));
+  fs.writeFileSync(path.join(STATE, 'status.json'), JSON.stringify({ ts: new Date().toISOString(), pid: process.pid, last_ok: lastOk ? new Date(lastOk).toISOString() : null, last_error: lastErr || null, backlog, backoff_until: backoffMs ? new Date(backoffMs).toISOString() : null, auth_rejected: authRejected, env_loaded_at: envLoadedAt }, null, 1));
 }
 
 log(`uplink start pid=${process.pid} engine=${BASE.replace(/^(https?:\/\/[^/]+).*$/, '$1')}`);
 fs.writeFileSync(path.join(STATE, 'uplink.pid'), String(process.pid));
 await pull(); await scan(); status();
-setInterval(async () => { await scan(); status(); }, SCAN_MS);
-setInterval(pull, PULL_MS);
-setInterval(pullRequests, REQ_PULL_MS);
+setInterval(async () => { await scan(); status(); }, SCAN_EVERY);
+setInterval(pull, PULL_EVERY);
+setInterval(pullRequests, REQ_PULL_EVERY);
 process.on('SIGTERM', () => { log('uplink stop'); process.exit(0); });
