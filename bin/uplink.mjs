@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Uplink: the ONLY process on the Grok Bot cloud computer that talks HTTP to the engine.
 // - every 10s: scan /workspace/desk/signals/<bot>/*.json, validate minimally, POST /signals (or /heartbeat, /reports), move to _delivered|_rejected|_expired
-// - every 5min: pull /watchlist /positions /pnl /events /signals/stats /requests into /workspace/desk/cache and /workspace/desk/inbox/<bot>/
+// - every 5min: pull /watchlist /positions /pnl /events /signals/stats into /workspace/desk/cache; every 30s: /requests into /workspace/desk/inbox/<bot>/ (+ acks)
 // Config: /workspace/desk/config/engine.env (ENGINE_BASE_URL, ENGINE_TOKEN). Node >= 18 (global fetch). No dependencies.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,7 +15,7 @@ const CACHE = path.join(WS, 'cache');
 const INBOX = path.join(WS, 'inbox');
 const STATE = path.join(WS, 'state', 'uplink');
 const LOG = path.join(WS, 'logs', 'uplink.log');
-const SCAN_MS = 10_000, PULL_MS = 300_000;
+const SCAN_MS = 10_000, PULL_MS = 300_000, REQ_PULL_MS = 30_000;   // requests every 30 s so a doorbell ring (45 s after the request) finds the file in the inbox
 // Self-update: playbooks-sync.sh (run hourly by the Ops Bot) replaces this file on disk; a running process would keep
 // the old code forever, so every pull compares the file's size+mtime with the one it started from and re-execs itself.
 const SELF = fileURLToPath(import.meta.url);
@@ -117,6 +117,12 @@ async function scan() {
 }
 
 async function pull() {
+  await pullCache();
+  await pullRequests();
+  maybeReexecOnUpdate();
+}
+
+async function pullCache() {
   const targets = [['/watchlist', 'watchlist.json'], ['/positions', 'positions.json'], ['/pnl?range=7d', 'pnl.json'], ['/events', 'events_24h.json'], ['/signals/stats', 'signal_stats_7d.json']];
   for (const [p, name] of targets) {
     try {
@@ -128,6 +134,9 @@ async function pull() {
       }
     } catch (e) { lastErr = e.message; log(`pull ${p} failed: ${e.message}`); }
   }
+}
+
+async function pullRequests() {
   // Chief (Phase 4) will own cache/narratives_seen.json; until then an empty file keeps Rug's copycat check from
   // reporting "narratives_seen.json: missing" on every run. Never overwritten once present.
   const seen = path.join(CACHE, 'narratives_seen.json');
@@ -158,7 +167,6 @@ async function pull() {
       }
     }
   } catch (e) { log(`requests pull failed: ${e.message}`); }
-  maybeReexecOnUpdate();
 }
 
 function maybeReexecOnUpdate() {
@@ -183,4 +191,5 @@ fs.writeFileSync(path.join(STATE, 'uplink.pid'), String(process.pid));
 await pull(); await scan(); status();
 setInterval(async () => { await scan(); status(); }, SCAN_MS);
 setInterval(pull, PULL_MS);
+setInterval(pullRequests, REQ_PULL_MS);
 process.on('SIGTERM', () => { log('uplink stop'); process.exit(0); });
