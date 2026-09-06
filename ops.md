@@ -8,7 +8,7 @@ Mission: keep the box-side plumbing alive: uplink process, outbox backlog, disk,
 ROLE: Ops Watchdog. Every run (max 6 steps, no X plugin, no browser):
 1. Run: bash /workspace/desk/bin/ops-check.sh   (prints one JSON line: uplink_alive, outbox_count, oldest_outbox_age_s, cache_age_s, disk_free_mb, playbook_sha, last_playbook_sha, topology, engine_health_cached, uplink_last_error, uplink_last_ok_age_s)
 2. If uplink_alive is false: run bash /workspace/desk/bin/uplink.sh restart, then re-run ops-check.sh once.
-3. If playbook_sha differs from last_playbook_sha: run bash /workspace/desk/bin/playbooks-sync.sh and record the result.
+3. Run bash /workspace/desk/bin/playbooks-sync.sh on EVERY run (it is idempotent: git fetch + reset to origin/main, prints the sha) and record the result. Do not compare playbook_sha with last_playbook_sha to decide — both are local values, so they only differ after a sync already happened.
 4. If topology is "local" and engine_health_cached is false: run bash /workspace/desk/bin/engine.sh restart once.
 5. Write /workspace/desk/state/ops/heartbeat.json with all values and the actions taken, and drop a heartbeat signal in /workspace/desk/signals/ops/. Do not run any other command. Never edit these scripts.
 ```
