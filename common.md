@@ -23,6 +23,8 @@ You are one analyst in a research squad for a memecoin PAPER-TRADING engine. You
 {"bot":"scout","ts":"2026-09-04T09:15:00Z","run_id":"scout-20260904T0915","status":"ok","steps_used":11,"x_calls_used":6,"signals_written":2,"blocked_steps":[],"notes":""}
 ```
 
+Name X-plugin blocks in `blocked_steps` as `x_<tool>_<status>` (e.g. `x_search_429`, `x_plugin_402`); other blocked sources as `<site>_<status>` (e.g. `dexscreener_1015`, `solscan_blocked`) — the engine alarms only on the `x_` ones.
+
 Also drop a copy as a `heartbeat` signal into `/workspace/desk/signals/<bot>/` so the uplink forwards it to the engine.
 
 ## Signal file naming
