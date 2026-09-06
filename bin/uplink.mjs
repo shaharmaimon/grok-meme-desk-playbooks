@@ -6,7 +6,9 @@
 // Token rotation: engine.env is re-read when its size/mtime changes (checked every scan and every pull) and on the first
 // 401/403 after a success, so a rotated token (new one-time bootstrap file) is picked up without a manual restart.
 // 401/403 = "auth rejected": its own log line, status.json last_error "auth_401"/"auth_403", backoff capped at 60 s
-// (an unreachable engine backs off up to 300 s as before).
+// (an unreachable engine backs off up to 300 s as before). ANY other engine answer ends the auth streak (call()): after a
+// rotation the recovery usually comes through the 30 s /requests poll while the outbox is empty, and status.json must not
+// keep last_error "auth_401" / a stale last_ok until the 5-min cache pull.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -20,8 +22,10 @@ const INBOX = path.join(WS, 'inbox');
 const STATE = path.join(WS, 'state', 'uplink');
 const LOG = path.join(WS, 'logs', 'uplink.log');
 const SCAN_MS = 10_000, PULL_MS = 300_000, REQ_PULL_MS = 30_000;   // requests every 30 s so a doorbell ring (45 s after the request) finds the file in the inbox
-// Tests only (engine/test/squad/uplink_env.test.ts): shorter cadences; unset on the box.
-const ms = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n >= 50 ? n : dflt; };
+// Tests only (engine/test/squad/uplink_env.test.ts): shorter cadences; unset on the box. Below 1 s they are honoured only
+// with UPLINK_TEST=1, so a stray value in the box's environment cannot turn the uplink into a flood generator.
+const MIN_MS = process.env.UPLINK_TEST === '1' ? 50 : 1000;
+const ms = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n >= MIN_MS ? n : dflt; };
 const SCAN_EVERY = ms('UPLINK_SCAN_MS', SCAN_MS), PULL_EVERY = ms('UPLINK_PULL_MS', PULL_MS), REQ_PULL_EVERY = ms('UPLINK_REQ_PULL_MS', REQ_PULL_MS);
 const AUTH_BACKOFF_MAX_MS = 60_000, UNREACHABLE_BACKOFF_MAX_MS = 300_000;
 // Self-update: playbooks-sync.sh (run hourly by the Ops Bot) replaces this file on disk; a running process would keep
@@ -85,7 +89,13 @@ async function call(method, p, body, bot) {
   try {
     const res = await fetch(BASE + p, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${env.ENGINE_TOKEN}`, 'x-squad-bot': bot || 'uplink' }, body: body ? JSON.stringify(body) : undefined, signal: ctrl.signal });
     const text = await res.text(); let data; try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 300) }; }
-    if (res.status !== 401 && res.status !== 403) authRejected = false;
+    if (res.status !== 401 && res.status !== 403) {
+      // The engine accepted the token, whatever route answered: end the auth streak here (not only in the scan / cache-pull
+      // success paths) so a recovery through the /requests poll shows in status.json right away.
+      authRejected = false;
+      if (lastErr.startsWith('auth_')) lastErr = '';
+      if (res.status < 500) lastOk = Date.now();   // an accepted call; 5xx is the engine's problem, not a token's
+    }
     return { status: res.status, data };
   } finally { clearTimeout(t); }
 }
@@ -227,7 +237,7 @@ function status() {
   fs.writeFileSync(path.join(STATE, 'status.json'), JSON.stringify({ ts: new Date().toISOString(), pid: process.pid, last_ok: lastOk ? new Date(lastOk).toISOString() : null, last_error: lastErr || null, backlog, backoff_until: backoffMs ? new Date(backoffMs).toISOString() : null, auth_rejected: authRejected, env_loaded_at: envLoadedAt }, null, 1));
 }
 
-log(`uplink start pid=${process.pid} engine=${BASE.replace(/^(https?:\/\/[^/]+).*$/, '$1')}`);
+log(`uplink start pid=${process.pid} engine=${BASE.replace(/^(https?:\/\/[^/]+).*$/, '$1')} scan=${SCAN_EVERY / 1000}s pull=${PULL_EVERY / 1000}s requests=${REQ_PULL_EVERY / 1000}s`);
 fs.writeFileSync(path.join(STATE, 'uplink.pid'), String(process.pid));
 await pull(); await scan(); status();
 setInterval(async () => { await scan(); status(); }, SCAN_EVERY);
