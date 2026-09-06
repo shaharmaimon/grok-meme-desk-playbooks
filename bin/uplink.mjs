@@ -128,6 +128,10 @@ async function pull() {
       }
     } catch (e) { lastErr = e.message; log(`pull ${p} failed: ${e.message}`); }
   }
+  // Chief (Phase 4) will own cache/narratives_seen.json; until then an empty file keeps Rug's copycat check from
+  // reporting "narratives_seen.json: missing" on every run. Never overwritten once present.
+  const seen = path.join(CACHE, 'narratives_seen.json');
+  if (!fs.existsSync(seen)) { try { fs.writeFileSync(seen, JSON.stringify({ version: 1, updated_at: new Date().toISOString(), narratives: [] }, null, 1)); } catch {} }
   try {
     const r = await call('GET', '/requests?bot=*');
     if (r.status === 200 && Array.isArray(r.data)) for (const q of r.data) {
