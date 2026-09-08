@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Uplink: the ONLY process on the Grok Bot cloud computer that talks HTTP to the engine.
 // - every 10s: scan /workspace/desk/signals/<bot>/*.json, validate minimally, POST /signals (or /heartbeat, /reports), move to _delivered|_rejected|_expired
-// - every 5min: pull /watchlist /positions /pnl /events /signals/stats into /workspace/desk/cache; every 30s: /requests into /workspace/desk/inbox/<bot>/ (+ acks)
+// - every 5min: pull /watchlist /positions /pnl /events /signals/stats /proposals into /workspace/desk/cache; every 30s: /requests into /workspace/desk/inbox/<bot>/ (+ acks)
 // Config: /workspace/desk/config/engine.env (ENGINE_BASE_URL, ENGINE_TOKEN). Node >= 18 (global fetch). No dependencies.
 // Token rotation: engine.env is re-read when its size/mtime changes (checked every scan and every pull) and on the first
 // 401/403 after a success, so a rotated token (new one-time bootstrap file) is picked up without a manual restart.
@@ -173,7 +173,7 @@ async function pull() {
 }
 
 async function pullCache() {
-  const targets = [['/watchlist', 'watchlist.json'], ['/positions', 'positions.json'], ['/pnl?range=7d', 'pnl.json'], ['/events', 'events_24h.json'], ['/signals/stats', 'signal_stats_7d.json']];
+  const targets = [['/watchlist', 'watchlist.json'], ['/positions', 'positions.json'], ['/pnl?range=7d', 'pnl.json'], ['/events', 'events_24h.json'], ['/signals/stats', 'signal_stats_7d.json'], ['/proposals', 'proposals.json']];
   for (const [p, name] of targets) {
     try {
       const r = await call('GET', p);
