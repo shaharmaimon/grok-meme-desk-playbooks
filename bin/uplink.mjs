@@ -224,6 +224,11 @@ async function pullRequests() {
 function maybeReexecOnUpdate() {
   const cur = selfSig();
   if (!cur || !SELF_SIG || cur === SELF_SIG) return;
+  if (process.env.UPLINK_SUPERVISED === "1") {   // uplink-supervisor.sh restarts us: exit instead of spawning a second copy
+    log(`uplink code changed on disk (${SELF_SIG} -> ${cur}); exiting 75 for the supervisor`);
+    status();
+    process.exit(75);
+  }
   log(`uplink code changed on disk (${SELF_SIG} -> ${cur}); re-exec`);
   try {
     const out = fs.openSync(path.join(path.dirname(LOG), 'uplink.out'), 'a');

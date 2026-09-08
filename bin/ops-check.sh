@@ -4,6 +4,7 @@ WS="${WORKSPACE:-/workspace/desk}"
 # "Update Agent Computer" reboots the box and drops EMPTY directories; recreate the layout on every run.
 mkdir -p "$WS"/{cache,inbox,signals,state/uplink,state/ops,reports,logs,config,tools}
 alive=false; [ -f "$WS/state/uplink/uplink.pid" ] && kill -0 "$(cat "$WS/state/uplink/uplink.pid")" 2>/dev/null && alive=true
+sup=false; [ -f "$WS/state/uplink/supervisor.pid" ] && kill -0 "$(cat "$WS/state/uplink/supervisor.pid")" 2>/dev/null && sup=true
 outbox=0; oldest=0; now=$(date +%s)
 for d in "$WS"/signals/*/; do n=$(basename "$d"); case "$n" in _*) continue;; esac
   for f in "$d"*.json; do [ -f "$f" ] || continue; outbox=$((outbox+1)); m=$(stat -c %Y "$f" 2>/dev/null || echo "$now"); a=$((now-m)); [ "$a" -gt "$oldest" ] && oldest=$a; done; done
@@ -23,5 +24,5 @@ if [ -f "$st" ]; then
   if [ -n "$ok" ]; then oks=$(date -d "$ok" +%s 2>/dev/null || echo ""); [ -n "$oks" ] && ul_ok_age=$((now-oks)); fi
 fi
 for l in "$WS"/logs/*.log "$WS"/logs/*.out; do [ -f "$l" ] && [ "$(stat -c %s "$l")" -gt 20000000 ] && mv "$l" "$l.1"; done
-printf '{"ts":"%s","uplink_alive":%s,"outbox_count":%d,"oldest_outbox_age_s":%d,"cache_age_s":%d,"disk_free_mb":%s,"playbook_sha":"%s","last_playbook_sha":"%s","topology":"%s","engine_health_cached":%s,"uplink_last_error":%s,"uplink_last_ok_age_s":%d}\n' \
-  "$(date -u +%FT%TZ)" "$alive" "$outbox" "$oldest" "$cache_age" "${disk:-0}" "$sha" "$last_sha" "$topo" "$eng" "$ul_err" "$ul_ok_age"
+printf '{"ts":"%s","uplink_alive":%s,"supervisor_alive":%s,"outbox_count":%d,"oldest_outbox_age_s":%d,"cache_age_s":%d,"disk_free_mb":%s,"playbook_sha":"%s","last_playbook_sha":"%s","topology":"%s","engine_health_cached":%s,"uplink_last_error":%s,"uplink_last_ok_age_s":%d}\n' \
+  "$(date -u +%FT%TZ)" "$alive" "$sup" "$outbox" "$oldest" "$cache_age" "${disk:-0}" "$sha" "$last_sha" "$topo" "$eng" "$ul_err" "$ul_ok_age"
