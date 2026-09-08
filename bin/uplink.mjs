@@ -182,6 +182,7 @@ async function pullCache() {
         fs.writeFileSync(tmp, JSON.stringify({ fetched_at: new Date().toISOString(), data: r.data }, null, 1));
         fs.renameSync(tmp, path.join(CACHE, name)); lastOk = Date.now(); lastErr = '';   // an accepted call clears last_error (ops-check.sh reports it as uplink_last_error)
       } else if (r.status === 401 || r.status === 403) { onAuthRejected(r.status, `GET ${p}`); return; }   // the other pulls would fail the same way
+      else { lastErr = `GET ${p} -> ${r.status}`; log(`pull ${p} -> HTTP ${r.status} (a path missing from the Caddy allow-list answers 404)`); }   // 2026-09-08: /proposals 404ed silently for a cycle
     } catch (e) { lastErr = e.message; log(`pull ${p} failed: ${e.message}`); }
   }
 }
