@@ -23,6 +23,8 @@ You are one analyst in a research squad for a memecoin PAPER-TRADING engine. You
 {"bot":"scout","ts":"2026-09-04T09:15:00Z","run_id":"scout-20260904T0915","status":"ok","steps_used":11,"x_calls_used":6,"signals_written":2,"blocked_steps":[],"notes":""}
 ```
 
+`status` is REQUIRED on every heartbeat, including doorbell / webhook runs and sweeps that found nothing: `ok` when the run completed, `warn` when a step was blocked or skipped (list it in `blocked_steps`), `error` when the playbook could not be followed. A heartbeat without `status` reaches the engine as `unknown` and shows as "?" on the dashboard (half of sent's and a third of rug's heartbeats on 2026-09-08 were like that).
+
 Name X-plugin blocks in `blocked_steps` as `x_<tool>_<status>` (e.g. `x_search_429`, `x_plugin_402`); other blocked sources as `<site>_<status>` (e.g. `dexscreener_1015`, `solscan_blocked`) — the engine alarms only on the `x_` ones.
 
 Also drop a copy as a `heartbeat` signal into `/workspace/desk/signals/<bot>/` so the uplink forwards it to the engine.
