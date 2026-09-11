@@ -25,6 +25,7 @@ If pnl.json is older than 6 hours, write the report with status=stale and no pro
 | `scoring.analyst_weight` | 0 – 0.5 |
 | `guard.min_quote_reserve_sol` | 30 – 150 |
 | `guard.min_age_sec` | 60 – 600 |
+| `scoring.min_age_sec_enter` | 0 – 3600 (entry-only minimum age, s since migration; 1800 since 2026-09-11 — young tokens are still scored for the shadow data) |
 
 Anything else (live-mode parameters, tokens, cadences) is out of scope.
 
