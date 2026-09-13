@@ -27,7 +27,11 @@ You are one analyst in a research squad for a memecoin PAPER-TRADING engine. You
 
 Name X-plugin blocks in `blocked_steps` as `x_<tool>_<status>` (e.g. `x_search_429`, `x_plugin_402`); other blocked sources as `<site>_<status>` (e.g. `dexscreener_1015`, `solscan_blocked`) — the engine alarms only on the `x_` ones.
 
-Also drop a copy as a `heartbeat` signal into `/workspace/desk/signals/<bot>/` so the uplink forwards it to the engine.
+Also write it as a `heartbeat` SIGNAL into `/workspace/desk/signals/<bot>/` so the uplink forwards it to the engine. The signal needs the envelope fields the uplink validates (the state-file shape above alone is rejected):
+
+```json
+{"schema_version":1,"signal_id":"<bot>-20260913T093000Z-hb-a1b2","bot":"<bot>","type":"heartbeat","ts":"2026-09-13T09:30:00Z","ttl_sec":3600,"status":"ok","run_id":"<bot>-20260913T0930","steps_used":11,"x_calls_used":6,"signals_written":2,"blocked_steps":[],"notes":""}
+```
 
 ## Signal file naming
 

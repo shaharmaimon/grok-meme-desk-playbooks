@@ -118,12 +118,25 @@ function move(file, sub) {
   fs.renameSync(file, path.join(dir, path.basename(file)));
 }
 
+// The engine caps request bodies at 16 KB (fastify bodyLimit); keep a digest under 12 KB of UTF-8 so the JSON around
+// it fits — a bigger one answered 413 and, until 2026-09-13, stalled the whole outbox (see scan()).
+const MAX_REPORT_BYTES = 12_000;
+function capUtf8(text, max) {
+  if (Buffer.byteLength(text, 'utf8') <= max) return text;
+  return Buffer.from(text, 'utf8').subarray(0, max - 40).toString('utf8').replace(/\uFFFD+$/, '') + '\n…(truncated by uplink)';
+}
 function bodyFor(sig) {
   if (sig.type === 'heartbeat') return ['/heartbeat', sig];
   if (sig.type === 'digest') {
-    let text = sig.body;
-    if (!text && sig.path && fs.existsSync(String(sig.path))) text = fs.readFileSync(String(sig.path), 'utf8');
-    return ['/reports', { bot: sig.bot, kind: 'digest', body: text || JSON.stringify(sig) }];
+    let text = typeof sig.body === 'string' ? sig.body : '';
+    if (!text && sig.path) {
+      // A Bot may only hand the uplink files under $WS/reports — common.md rule 4 (never read config/) is enforced here,
+      // not trusted: before 2026-09-13 any path a Bot named (including config/engine.env) was read and POSTed.
+      const p = path.resolve(String(sig.path)); const root = path.join(WS, 'reports') + path.sep;
+      if (p.startsWith(root) && fs.existsSync(p)) text = fs.readFileSync(p, 'utf8');
+      else log(`digest ${sig.signal_id}: path outside ${root} ignored`);
+    }
+    return ['/reports', { bot: sig.bot, kind: 'digest', body: capUtf8(text || JSON.stringify(sig), MAX_REPORT_BYTES) }];
   }
   return ['/signals', sig];
 }
@@ -154,8 +167,15 @@ async function scan() {
           log('429 rate limited; pausing 60s'); backoffMs = Date.now() + 60_000; return;
         } else if (r.status === 401 || r.status === 403) {
           onAuthRejected(r.status, `POST ${p}`); return;
+        } else if (r.status >= 400 && r.status < 500) {
+          // 413 (body too large), 404 (path not exposed by the proxy), 415 … are this FILE's problem, not the engine's:
+          // park it and carry on. 2026-09-13: one such file head-of-line-blocked every Bot's signals for as long as it
+          // stayed, while the pulls kept the uplink looking healthy.
+          fs.writeFileSync(file + '.error', `HTTP ${r.status} ${JSON.stringify(r.data).slice(0, 300)}`); move(file, '_rejected');
+          log(`${r.status} ${f}: parked in _rejected`); continue;
         } else { throw new Error(`HTTP ${r.status}`); }
       } catch (e) {
+        if (e && e.code === 'ENOENT') { log(`${f}: already handled by another pass`); continue; }   // not an engine problem
         lastErr = e.message;
         const prev = backoffMs ? Math.max(10_000, backoffMs - Date.now()) : 5_000;
         const wait = Math.min(UNREACHABLE_BACKOFF_MAX_MS, prev * 2);
@@ -246,7 +266,10 @@ function status() {
 log(`uplink start pid=${process.pid} engine=${BASE.replace(/^(https?:\/\/[^/]+).*$/, '$1')} scan=${SCAN_EVERY / 1000}s pull=${PULL_EVERY / 1000}s requests=${REQ_PULL_EVERY / 1000}s`);
 fs.writeFileSync(path.join(STATE, 'uplink.pid'), String(process.pid));
 await pull(); await scan(); status();
-setInterval(async () => { await scan(); status(); }, SCAN_EVERY);
-setInterval(pull, PULL_EVERY);
-setInterval(pullRequests, REQ_PULL_EVERY);
+// Never let a slow engine make two passes overlap: an overlapping scan re-POSTs the same files and the loser's rename
+// (ENOENT) used to be logged as "engine unreachable" and backed the uplink off for up to 5 min (2026-09-13).
+let scanning = false, pulling = false, pullingRequests = false;
+setInterval(async () => { if (scanning) return; scanning = true; try { await scan(); status(); } finally { scanning = false; } }, SCAN_EVERY);
+setInterval(async () => { if (pulling) return; pulling = true; try { await pull(); } finally { pulling = false; } }, PULL_EVERY);
+setInterval(async () => { if (pullingRequests) return; pullingRequests = true; try { await pullRequests(); } finally { pullingRequests = false; } }, REQ_PULL_EVERY);
 process.on('SIGTERM', () => { log('uplink stop'); process.exit(0); });

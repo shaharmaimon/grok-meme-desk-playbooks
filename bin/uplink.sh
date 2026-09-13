@@ -9,6 +9,7 @@ alive() { [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; }
 sup_alive() { [ -f "$SUP_PID" ] && kill -0 "$(cat "$SUP_PID")" 2>/dev/null; }
 case "${1:-status}" in
   start)
+    exec 9>"$STATE/start.lock"; flock -n 9 || { echo "another start is in progress"; exit 0; }
     if sup_alive; then
       if alive; then echo "uplink already running pid=$(cat "$PID") (supervisor $(cat "$SUP_PID"))"; else echo "supervisor alive pid=$(cat "$SUP_PID"), uplink restarting"; fi
       exit 0

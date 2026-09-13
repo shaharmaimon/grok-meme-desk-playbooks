@@ -12,6 +12,7 @@
 WS="${WORKSPACE:-/workspace/desk}"; STATE="$WS/state/uplink"; LOGD="$WS/logs"; mkdir -p "$STATE" "$LOGD"
 STOP="$STATE/STOP"; SUP_PID="$STATE/supervisor.pid"
 NODE="$(command -v node || echo "$WS/tools/node/bin/node")"
+if [ -f "$SUP_PID" ] && [ "$(cat "$SUP_PID" 2>/dev/null)" != "$$" ] && kill -0 "$(cat "$SUP_PID")" 2>/dev/null; then echo "supervisor already running pid=$(cat "$SUP_PID")"; exit 0; fi
 echo $$ > "$SUP_PID"
 rm -f "$STOP"
 export UPLINK_SUPERVISED=1
